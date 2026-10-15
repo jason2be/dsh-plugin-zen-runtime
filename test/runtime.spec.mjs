@@ -287,5 +287,79 @@ await acheck('a transport failure propagates instead of being retried', async ()
   assert.equal(calls.length, before + 1, 'the request must not be sent a second time');
 });
 
+// --- the id value, which the shape checks above cannot see -------------------
+//
+// A well-shaped `ses_` id is not enough: the gateway decodes the leading twelve
+// hex characters, and only an id minted the way opencode's own `Identifier`
+// mints one survives. That value is `(ms * 4096 + counter) % 2**48`, inverted
+// bitwise for a session (descending) and left as-is for a message (ascending);
+// the gateway refuses anything whose low twelve bits fall below 0xFC0. An id
+// drawn from the hex alphabet at random has the right shape and the wrong
+// value, which is exactly the bug these checks pin down.
+
+const ID_MODULUS = 2 ** 48;
+const ID_MASK = ID_MODULUS - 1;
+
+/** What opencode's `Identifier.timestamp` reads back out of an id. */
+function decodeId(id, descending) {
+  const raw = BigInt(`0x${id.slice(4, 16)}`);
+  const ascending = descending ? ~raw & BigInt(ID_MASK) : raw;
+  return { ascending, counter: Number(ascending & 4095n), ms: Number(ascending >> 12n) };
+}
+
+const frozenClock = () => ({ ms: 0, counter: 0 });
+const MINTED_AT = 1791897384438;
+
+check('a session id encodes ms * 4096 + counter, inverted like descending()', () => {
+  const id = plugin.opencodeId('ses', true, frozenClock(), MINTED_AT);
+  assert.match(id, SESSION_RE);
+  const decoded = decodeId(id, true);
+  assert.equal(decoded.ms, MINTED_AT % 2 ** 36);
+  assert.equal(decoded.counter, 1);
+});
+
+check('the counter increments within a millisecond and restarts on the next one', () => {
+  const clock = frozenClock();
+  assert.equal(decodeId(plugin.opencodeId('ses', true, clock, MINTED_AT), true).counter, 1);
+  assert.equal(decodeId(plugin.opencodeId('ses', true, clock, MINTED_AT), true).counter, 2);
+  assert.equal(decodeId(plugin.opencodeId('ses', true, clock, MINTED_AT + 1), true).counter, 1);
+});
+
+check('a message id is ascending and shares the session id clock', () => {
+  const clock = frozenClock();
+  const session = decodeId(plugin.opencodeId('ses', true, clock, MINTED_AT), true);
+  const message = decodeId(plugin.opencodeId('msg', false, clock, MINTED_AT), false);
+  assert.equal(session.counter, 1);
+  assert.equal(message.counter, 2, 'one clock and one counter serve both prefixes');
+  assert.equal(message.ms, MINTED_AT % 2 ** 36);
+});
+
+check('every minted id stays inside the counter window the gateway accepts', () => {
+  const clock = frozenClock();
+  const seen = new Set();
+  for (let index = 0; index < 200; index += 1) {
+    const id = plugin.opencodeId('ses', true, clock, MINTED_AT);
+    const raw = BigInt(`0x${id.slice(4, 16)}`);
+    assert.ok(decodeId(id, true).counter <= 63, `${id} carries an out-of-window counter`);
+    assert.ok((raw & 0xfffn) >= 0xfc0n, `${id} violates the low-bits rule`);
+    assert.equal(seen.has(id), false, `${id} repeats`);
+    seen.add(id);
+  }
+});
+
+check('the wired session id decodes back to the moment it was minted', () => {
+  const decoded = decodeId(firstHeaders.get('x-opencode-session'), true);
+  assert.ok(decoded.counter <= 63, 'a freshly minted session id must hold a valid counter');
+  const drift = Math.abs(decoded.ms - (Date.now() % 2 ** 36));
+  assert.ok(drift < 60_000, `session id decodes ${drift}ms away from now`);
+});
+
+check('the shape is not the rule: a random-prefix id is refused', () => {
+  // Exactly what the previous generator produced — right shape, rejected value.
+  const randomPrefix = `ses_0000ffff0001${'a'.repeat(14)}`;
+  assert.match(randomPrefix, SESSION_RE);
+  assert.ok((BigInt(`0x${randomPrefix.slice(4, 16)}`) & 0xfffn) < 0xfc0n);
+});
+
 console.log(checks.join('\n'));
 console.log(process.exitCode === 1 ? '\nFAILED' : `\nok — ${checks.length} checks passed`);

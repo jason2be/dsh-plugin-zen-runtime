@@ -23,7 +23,7 @@ DSH（DeepSeek Harness）的运行时补丁插件，让 OpenCode ZEN 的免费�
 ## 自检
 
 ```sh
-node test/runtime.spec.mjs     # 29 项，零依赖、不联网
+node test/runtime.spec.mjs     # 35 项，零依赖、不联网
 ```
 
 改了行为就补用例。修 bug 时先确认**用例在 bug 存在时确实失败**（把 bug 改回去跑一遍），
@@ -31,9 +31,9 @@ node test/runtime.spec.mjs     # 29 项，零依赖、不联网
 
 ## 网关契约
 
-`lib/index.js` 头部注释与 [`docs/zen-gateway.md`](docs/zen-gateway.md) 记录了三项必需条件
-（UA 含 `opencode/<版本>`、`x-opencode-session` 前 12 位为小写十六进制、工具集含
-`bash` 与 `read`）。
+`lib/index.js` 头部注释与 [`docs/zen-gateway.md`](docs/zen-gateway.md) 记录了四项必需条件
+（UA 含 `opencode/<版本>`、`x-opencode-session` 是按 `Identifier` 算法**铸出**的 id
+而非随机 hex、工具集含 `bash` 与 `read`、`body.stream` 为 `true`）。
 
 改这里等于改对外契约，**三处必须同步**：源码头部注释、`docs/zen-gateway.md`、
 README 的实测表。这三处曾经口径不一致，独立复核时被判为问题。

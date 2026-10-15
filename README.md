@@ -3,11 +3,11 @@
 让 DSH（DeepSeek Harness）能用 **OpenCode ZEN 免费模型**的运行时补丁插件——**不修改磁盘上任何文件**。
 
 ```sh
-node test/runtime.spec.mjs        # 29 项自检，零依赖、不联网
+node test/runtime.spec.mjs        # 35 项自检，零依赖、不联网
 ```
 
 > 网关凭什么判定"请求来自 OpenCode"的完整实测记录见
-> [`docs/zen-gateway.md`](docs/zen-gateway.md)。那三项必需条件不是推测，
+> [`docs/zen-gateway.md`](docs/zen-gateway.md)。那四项必需条件不是推测，
 > 是抓包加单变量剥离量出来的。
 
 ## 为什么需要它
@@ -34,8 +34,13 @@ attribution 覆盖上去。结果是：**provider 里配的 `User-Agent` 永远�
 3. 若 `body.tools` 里缺 `bash` 或 `read`，补上对应的桩工具；
 4. body 被改写时删掉 `content-length`（否则过期长度会让请求挂起）。
 
-`x-opencode-session` 每进程生成一次并复用，`x-opencode-request` 每请求一条，
-与官方客户端一致；两者的前 12 位都是**小写十六进制**（网关校验这一段）。
+`x-opencode-session` 每进程一条并复用，`x-opencode-request` 每请求一条，与官方客户端一致：
+**按 opencode `Identifier` 的算法铸**——`(毫秒 * 4096 + 同毫秒计数) % 2**48`，
+session 取 48 位反码（`descending()`）、message 取原值（`ascending()`），
+再拼 12 位小写 hex 与 14 位 base62。网关会回读那 12 位 hex，**随机 hex 只有 64/4096 能过**
+（§3.2 有实测边界）；`x-opencode-request` 本身不参与判定。
+
+第 4 项必需条件是 `body.stream: true`（§3.4）。而 DSH 的 `openai-completions` 每个请求本来就发`"stream": true`，所以不用特意处理。
 
 ## 装配（以 DSH 桌面应用的 `desktop` profile 为例）
 
@@ -83,8 +88,8 @@ ZEN 的 API key 放 DSH 凭据存储（`apiKeyEnv` 指向的名字即可）：
         api: openai-completions
         baseURL: https://opencode.ai/zen/v1
         models:
-          - id: ling-3.0-flash-fin-free
-            name: ling-3.0-flash-fin-free
+          - id: mimo-v2.6-flash-free
+            name: mimo-v2.6-flash-free
 ```
 
 **provider 里不用配 headers**：配了 `User-Agent` 也会被 `requestHeaders()` 剥掉，
@@ -142,6 +147,7 @@ ZEN 的 API key 放 DSH 凭据存储（`apiKeyEnv` 指向的名字即可）：
 (`*-free`) models work in DeepSeek Harness without patching any file on disk.
 It wraps `globalThis.fetch` once per process and, for allow-listed hostnames
 only, restores the `opencode/<version>` user agent, adds the `x-opencode-*`
-identity headers, and appends the `bash`/`read` tool stubs the gateway requires.
-See [`docs/zen-gateway.md`](docs/zen-gateway.md) for the measured evidence
-behind those three requirements. MIT licensed.
+identity headers (with session and message ids minted by OpenCode's own
+identifier scheme, not random hex), and appends the `bash`/`read` tool stubs the
+gateway requires. See [`docs/zen-gateway.md`](docs/zen-gateway.md) for the
+measured evidence behind those four requirements. MIT licensed.
